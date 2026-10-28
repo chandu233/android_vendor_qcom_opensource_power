@@ -89,11 +89,6 @@ void setInteractive(bool interactive) {
     set_interactive(interactive ? 1 : 0);
 }
 
-template <class T>
-constexpr size_t enum_size() {
-    return static_cast<size_t>(*(ndk::enum_range<T>().end() - 1)) + 1;
-}
-
 ndk::ScopedAStatus Power::setMode(Mode type, bool enabled) {
     LOG(INFO) << "Power setMode: " << static_cast<int32_t>(type) << " to: " << enabled;
 #ifdef MODE_EXT
@@ -306,43 +301,65 @@ ndk::ScopedAStatus Power::getHintSessionPreferredRate(int64_t* outNanoseconds) {
 }
 
 template <class E>
-int64_t bitsForEnum() {
-    return static_cast<int64_t>(std::bitset<enum_size<E>()>().set().to_ullong());
+constexpr int64_t bitForEnum(E value) {
+    return int64_t{1} << static_cast<int32_t>(value);
 }
 
-/**
- * For sessionHints, sessionModes, and sessionTags, each bit from the left corresponds to the
- * support status of that same value in the enum. For example, POWER_EFFICIENCY and
- * GRAPHICS_PIPELINE are enabled for SessionMode.
- * https://android.googlesource.com/platform/hardware/interfaces/+/refs/heads/main/power/aidl/android/hardware/power
- */
 ndk::ScopedAStatus Power::getSupportInfo(SupportInfo* _aidl_return) {
-    static SupportInfo supportInfo = {.usesSessions = true,
-                                      .modes = 0b10001100,
-                                      .boosts = 0b0,
-                                      .sessionHints = 0b1100001111,
-                                      .sessionModes = 0b0011,
-                                      .sessionTags = 0b001111,
-                                      .compositionData =
-                                              {
-                                                      .isSupported = false,
-                                                      .disableGpuFences = false,
-                                                      .maxBatchSize = 1,
-                                                      .alwaysBatch = false,
-                                              },
-                                      .headroom = {
-                                              .isCpuSupported = true,
-                                              .isGpuSupported = true,
-                                              .cpuMinIntervalMillis = 1000,
-                                              .gpuMinIntervalMillis = 1000,
-                                              .cpuMinCalculationWindowMillis = 50,
-                                              .cpuMaxCalculationWindowMillis = CPU_MAX_DURATION_MS,
-                                              .gpuMinCalculationWindowMillis = 50,
-                                              .gpuMaxCalculationWindowMillis = GPU_MAX_DURATION_MS,
-                                              .cpuMaxTidCount = 5,
-                                      }};
+    static const SupportInfo supportInfo = {
+            .usesSessions = true,
+            .modes = 0,
+            .boosts = 0,
+            .sessionHints = bitForEnum(SessionHint::CPU_LOAD_UP) |
+                            bitForEnum(SessionHint::CPU_LOAD_DOWN) |
+                            bitForEnum(SessionHint::CPU_LOAD_RESET) |
+                            bitForEnum(SessionHint::CPU_LOAD_RESUME) |
+                            bitForEnum(SessionHint::CPU_LOAD_SPIKE) |
+                            bitForEnum(SessionHint::GPU_LOAD_SPIKE),
+            .sessionModes = bitForEnum(SessionMode::POWER_EFFICIENCY) |
+                            bitForEnum(SessionMode::GRAPHICS_PIPELINE),
+            .sessionTags = bitForEnum(SessionTag::OTHER) | bitForEnum(SessionTag::SURFACEFLINGER) |
+                           bitForEnum(SessionTag::HWUI) | bitForEnum(SessionTag::GAME),
+            .compositionData =
+                    {
+                            .isSupported = false,
+                            .disableGpuFences = false,
+                            .maxBatchSize = 1,
+                            .alwaysBatch = false,
+                    },
+            .headroom = {
+                    .isCpuSupported = true,
+                    .isGpuSupported = true,
+                    .cpuMinIntervalMillis = 1000,
+                    .gpuMinIntervalMillis = 1000,
+                    .cpuMinCalculationWindowMillis = 50,
+                    .cpuMaxCalculationWindowMillis = CPU_MAX_DURATION_MS,
+                    .gpuMinCalculationWindowMillis = 50,
+                    .gpuMaxCalculationWindowMillis = GPU_MAX_DURATION_MS,
+                    .cpuMaxTidCount = 5,
+            }};
     // Copy the support object into the binder
     *_aidl_return = supportInfo;
+    for (Mode mode : ndk::enum_range<Mode>()) {
+        bool supported = false;
+        auto status = isModeSupported(mode, &supported);
+        if (!status.isOk()) {
+            return status;
+        }
+        if (supported) {
+            _aidl_return->modes |= bitForEnum(mode);
+        }
+    }
+    for (Boost boost : ndk::enum_range<Boost>()) {
+        bool supported = false;
+        auto status = isBoostSupported(boost, &supported);
+        if (!status.isOk()) {
+            return status;
+        }
+        if (supported) {
+            _aidl_return->boosts |= bitForEnum(boost);
+        }
+    }
     return ndk::ScopedAStatus::ok();
 }
 
